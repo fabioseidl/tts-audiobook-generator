@@ -1,0 +1,10 @@
+.git
+.gitignore
+.claude
+__pycache__/
+*.pyc
+# These are bind-mounted at runtime; don't bake them into the image.
+models/
+output/
+voices/
+README.md

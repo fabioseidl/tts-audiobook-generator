@@ -1,0 +1,27 @@
+services:
+  xtts:
+    build: .
+    container_name: xtts-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./voices:/app/voices
+      - ./output:/app/output
+      # XTTS downloads the model into ~/.local/share/tts; persist it so it is
+      # not re-downloaded on every container recreate.
+      - ./models:/root/.local/share/tts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First start downloads (~1.8 GB) and loads the model; give it headroom.
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -1,0 +1,14 @@
+# Pinned to a known-good combination. coqui-tts 0.27.5 imports
+# isin_mps_friendly, which transformers removed in 5.0, so transformers must
+# stay on the 4.x line (4.57.6 is the last 4.x). See:
+# https://github.com/idiap/coqui-ai-TTS/issues/558
+# [codec] pulls torchcodec, required for audio IO on PyTorch >= 2.9.
+coqui-tts[codec]==0.27.5
+transformers==4.57.6
+torch==2.12.1
+torchaudio==2.11.0
+fastapi
+uvicorn[standard]
+# Pure-wheel LAME binding used by app/main.py --join to encode the joined
+# WAV parts to MP3 without a system ffmpeg install.
+lameenc
