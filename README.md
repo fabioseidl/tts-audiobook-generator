@@ -57,19 +57,30 @@ curl -X POST http://localhost:8000/tts \
 `language` is a supported XTTS code (`en`, `pt`, `es`, `fr`, `de`, `it`, ...);
 defaults to `pt`.
 
-## Audiobook generator (`app/`)
+## Audiobook generator (`tools/`)
 
-[`app/main.py`](app/main.py) is a client that turns a whole ebook into an
-audiobook by driving the TTS server. It reads a markdown file, strips the
-markdown syntax, splits the text into small parts on sentence/clause
-boundaries (`<= --max-chars`, default 200), and POSTs each part to the API,
-saving one WAV per part.
+[`tools/generate_audiobook.py`](tools/generate_audiobook.py) is a client that
+turns a whole ebook into an audiobook by driving the TTS server. It reads a
+markdown file, strips the markdown syntax, splits the text into small parts on
+sentence/clause boundaries (`<= --max-chars`, default 200), and POSTs each part
+to the API, saving one WAV per part.
+
+The logic is split by concern under the `tools/audiobook/` package:
 
 ```
-ebook/ebook_full.md    input markdown (default)
-output/audio/          one part_NNNNN.wav per part
+tools/generate_audiobook.py   CLI + orchestration
+tools/audiobook/text.py       clean markdown, chunk into parts
+tools/audiobook/synthesis.py  call the TTS API, validate + retry
+tools/audiobook/join.py       concatenate WAVs into grouped MP3s
+```
+
+Inputs and outputs:
+
+```
+ebook/ebook_full.md      input markdown (default)
+output/audio/            one part_NNNNN.wav per part
 output/audio/parts.json  ordered parts (part_id, text, audio_file, status)
-output/audiobook/      grouped MP3s produced by --join
+output/audiobook/        grouped MP3s produced by --join
 ```
 
 Each part's audio is validated as a readable WAV and retried a few times; the
@@ -79,12 +90,12 @@ to `parts.json`, so a failed or interrupted run can be resumed.
 Start the TTS server first (see [Run](#run)), then:
 
 ```bash
-python app/main.py                 # full run
-python app/main.py --dry-run       # only build parts.json, no synthesis
-python app/main.py --limit 5       # only the first 5 parts
-python app/main.py --start-id 42   # resume from part 42
-python app/main.py --skip-existing # skip parts already synthesized
-python app/main.py --join          # concatenate WAVs into grouped MP3s
+python tools/generate_audiobook.py                 # full run
+python tools/generate_audiobook.py --dry-run       # only build parts.json, no synthesis
+python tools/generate_audiobook.py --limit 5       # only the first 5 parts
+python tools/generate_audiobook.py --start-id 42   # resume from part 42
+python tools/generate_audiobook.py --skip-existing # skip parts already synthesized
+python tools/generate_audiobook.py --join          # concatenate WAVs into grouped MP3s
 ```
 
 Other options: `--input`, `--output`, `--url`, `--voice`, `--language`,
