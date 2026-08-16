@@ -13,6 +13,8 @@ MAX_CHARS = 200
 _SENTENCE_END = re.compile(r"(?:(?<=[.!?…])|(?<=[.!?…][\"'”’\)\]]))\s+")
 # Clause boundaries used to break a sentence that is longer than MAX_CHARS.
 _CLAUSE_SPLIT = re.compile(r"(?<=[,;:—–])\s+")
+# A block that is a markdown heading ("# Title", "## Chapter", ...).
+_HEADING = re.compile(r"(?m)\A\s{0,3}#{1,6}\s+\S")
 
 
 def clean_markdown(text: str) -> str:
@@ -74,13 +76,17 @@ def _hard_split(sentence: str, max_chars: int) -> list[str]:
 def build_parts(markdown: str, max_chars: int = MAX_CHARS) -> list[dict]:
     """Turn cleaned markdown into an ordered list of parts.
 
-    Each returned dict has: part_id, text, chars.
+    Each returned dict has: part_id, kind, text, chars. ``kind`` is "title" for
+    a markdown heading and "text" for body prose; a heading always gets its own
+    part and is never merged with the surrounding text.
     """
     # Split into blank-line-separated blocks first.
     raw_blocks = re.split(r"\n\s*\n", markdown)
 
-    blocks: list[str] = []
+    # (kind, text) pairs; headings are kept apart from the prose around them.
+    blocks: list[tuple[str, str]] = []
     for block in raw_blocks:
+        kind = "title" if _HEADING.match(block) else "text"
         block = clean_markdown(block)
         # Join wrapped lines and collapse whitespace within the block.
         block = re.sub(r"\s+", " ", block).strip()
@@ -88,14 +94,17 @@ def build_parts(markdown: str, max_chars: int = MAX_CHARS) -> list[dict]:
             continue
         # PDF-extracted text sometimes breaks a single sentence across blank
         # lines; if the previous block did not end a sentence, glue this one on.
-        if blocks and not re.search(r"[.!?…][\"'”’\)\]]?$", blocks[-1]):
-            blocks[-1] = (blocks[-1] + " " + block).strip()
+        # Headings never take part in this: a title ends no sentence, so it
+        # would otherwise swallow the paragraph that follows it.
+        if (kind == "text" and blocks and blocks[-1][0] == "text"
+                and not re.search(r"[.!?…][\"'”’\)\]]?$", blocks[-1][1])):
+            blocks[-1] = ("text", (blocks[-1][1] + " " + block).strip())
         else:
-            blocks.append(block)
+            blocks.append((kind, block))
 
     # Break each block into sentences, then greedily pack them into chunks.
-    chunks: list[str] = []
-    for block in blocks:
+    chunks: list[tuple[str, str]] = []
+    for kind, block in blocks:
         current = ""
         for sentence in _SENTENCE_END.split(block):
             sentence = sentence.strip()
@@ -103,24 +112,26 @@ def build_parts(markdown: str, max_chars: int = MAX_CHARS) -> list[dict]:
                 continue
             if len(sentence) > max_chars:
                 if current:
-                    chunks.append(current)
+                    chunks.append((kind, current))
                     current = ""
-                chunks.extend(_hard_split(sentence, max_chars))
+                chunks.extend((kind, piece)
+                              for piece in _hard_split(sentence, max_chars))
                 continue
             if not current:
                 current = sentence
             elif len(current) + 1 + len(sentence) <= max_chars:
                 current += " " + sentence
             else:
-                chunks.append(current)
+                chunks.append((kind, current))
                 current = sentence
         if current:
-            chunks.append(current)
+            chunks.append((kind, current))
 
     parts = []
-    for i, text in enumerate(chunks, start=1):
+    for i, (kind, text) in enumerate(chunks, start=1):
         # The TTS text must contain no periods; replace every "." with ",".
         # Done after splitting so sentence boundaries are still detected above.
         text = text.replace(".", ",")
-        parts.append({"part_id": i, "text": text, "chars": len(text)})
+        parts.append({"part_id": i, "kind": kind, "text": text,
+                      "chars": len(text)})
     return parts
