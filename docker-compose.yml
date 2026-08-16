@@ -6,13 +6,11 @@ services:
       - "8000:8000"
     environment:
       # Number of XTTS instances held in memory and served concurrently.
-      # ~3 GB of VRAM each after the first; raise only if nvidia-smi shows room.
-      TTS_POOL_SIZE: "3"
+      TTS_POOL_SIZE: "5"
     volumes:
       - ./voices:/app/voices
       - ./output:/app/output
       # XTTS downloads the model into ~/.local/share/tts; persist it so it is
-      # not re-downloaded on every container recreate.
       - ./models:/root/.local/share/tts
     restart: unless-stopped
     healthcheck:
