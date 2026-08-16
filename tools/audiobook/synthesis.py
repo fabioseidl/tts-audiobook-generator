@@ -22,10 +22,26 @@ def is_valid_wav(data: bytes) -> bool:
         return False
 
 
-def synthesize(text, url, voice, language, timeout):
+def make_session(workers):
+    """Build one connection pool for the whole run.
+
+    Reusing connections matters more than it looks: a fresh connection per part
+    also re-pays DNS and TCP setup, and the pool must be at least as large as
+    the worker count or the threads serialize on a single connection.
+    """
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=workers, pool_maxsize=workers
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def synthesize(session, text, url, voice, language, timeout):
     """Call the TTS API and return the raw response bytes (or None on error)."""
     try:
-        resp = requests.post(
+        resp = session.post(
             url,
             json={"text": text, "voice": voice, "language": language},
             timeout=timeout,
@@ -39,7 +55,7 @@ def synthesize(text, url, voice, language, timeout):
     return resp.content
 
 
-def process_part(part, args):
+def process_part(part, args, session):
     """Synthesize one part, validating the audio, with retries.
 
     Returns the saved file's name on success, or None on failure.
@@ -59,7 +75,7 @@ def process_part(part, args):
 
     for attempt in range(1, args.retries + 1):
         data = synthesize(
-            part["text"], args.url, args.voice, args.language, args.timeout
+            session, part["text"], args.url, args.voice, args.language, args.timeout
         )
         if data is not None and is_valid_wav(data):
             audio_path.write_bytes(data)
@@ -89,15 +105,19 @@ def synthesize_parts(parts, args):
     once is what keeps the GPU busy; one request at a time leaves it ~25% used.
     Returns the first part that failed, or None if all of them succeeded.
     """
+    session = make_session(max(args.workers, 1))
+
     if args.workers <= 1:
         for part in parts:
-            if not _record(part, process_part(part, args)):
+            if not _record(part, process_part(part, args, session)):
                 return part
         return None
 
     failures = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(process_part, part, args): part for part in parts}
+        futures = {
+            pool.submit(process_part, part, args, session): part for part in parts
+        }
         for future in as_completed(futures):
             # Everything queued behind a failure is cancelled below; those
             # futures still come back here, with no result to record.

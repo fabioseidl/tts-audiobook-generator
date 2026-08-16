@@ -3,6 +3,10 @@
 .claude
 __pycache__/
 *.pyc
+# Host virtualenv: irrelevant in the image, and its lib64 symlink cannot be
+# read by the Windows build-context sender.
+.venv/
+ebook/
 # These are bind-mounted at runtime; don't bake them into the image.
 models/
 output/

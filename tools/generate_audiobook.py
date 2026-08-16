@@ -46,7 +46,11 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT = ROOT / "ebook" / "ebook_full.md"
 DEFAULT_OUTPUT = ROOT / "output/audio"
 DEFAULT_AUDIOBOOK = ROOT / "output/audiobook"
-DEFAULT_URL = "http://localhost:8000/tts"
+# 127.0.0.1, never "localhost": on Windows localhost resolves to ::1 first and
+# Docker publishes the port on IPv4 only, so every new connection stalls ~21 s
+# on the dead IPv6 route before falling back. That alone was ~80% of the
+# wall-clock time of a run.
+DEFAULT_URL = "http://127.0.0.1:8000/tts"
 DEFAULT_VOICE = "narrador.wav"
 DEFAULT_LANGUAGE = "pt"
 # Matches the server's default TTS_POOL_SIZE: XTTS is autoregressive, so one

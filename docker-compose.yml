@@ -5,8 +5,16 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Number of XTTS instances held in memory and served concurrently.
-      TTS_POOL_SIZE: "5"
+      # Concurrency comes from processes, not threads. XTTS decodes
+      # autoregressively in a Python loop that holds the GIL, so N model
+      # instances inside one interpreter take turns and the GPU stays ~13%
+      # busy. Each uvicorn worker is its own process with its own GIL and its
+      # own model, so they actually overlap.
+      # Read by uvicorn as its --workers default.
+      WEB_CONCURRENCY: "3"
+      # One model per worker; the in-process pool now only guards against a
+      # worker being handed two requests at once.
+      TTS_POOL_SIZE: "1"
     volumes:
       - ./voices:/app/voices
       - ./output:/app/output
