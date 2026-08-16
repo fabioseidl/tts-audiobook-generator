@@ -3,4 +3,4 @@ ebook/*
 voices/*
 models/*
 .claude/
-tools/audiobook/__pycache__/text.cpython-314.pyc
+__pycache__/

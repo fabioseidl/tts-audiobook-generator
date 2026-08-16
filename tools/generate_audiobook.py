@@ -6,7 +6,8 @@ Pipeline:
   2. Clean markdown syntax and normalize whitespace.
   3. Break it into an ordered array of parts, each <= MAX_CHARS characters,
      split on sentence / clause boundaries so the audio sounds natural.
-  4. POST each part's text to the TTS API and save the returned WAV.
+  4. POST each part's text to the TTS API and save the returned WAV, several
+     parts at a time (see --workers).
   5. Verify the WAV is not corrupted before moving on to the next part; retry
      a few times, and stop with a clear error if a part cannot be produced.
 
@@ -18,6 +19,7 @@ Usage:
     python tools/generate_audiobook.py --dry-run      # only build parts.json
     python tools/generate_audiobook.py --limit 5      # only the first 5 parts
     python tools/generate_audiobook.py --start-id 42  # resume from part 42
+    python tools/generate_audiobook.py --workers 4    # 4 concurrent requests
     python tools/generate_audiobook.py --join         # join WAV parts into MP3s
 
 The --join mode is a separate step run after synthesis: it concatenates the
@@ -35,7 +37,7 @@ import sys
 from pathlib import Path
 
 from audiobook.text import build_parts, MAX_CHARS
-from audiobook.synthesis import process_part
+from audiobook.synthesis import synthesize_parts
 from audiobook.join import join_audiobook, JOIN_GROUP_SIZE, MP3_BITRATE
 
 # --- defaults -------------------------------------------------------------
@@ -47,6 +49,9 @@ DEFAULT_AUDIOBOOK = ROOT / "output/audiobook"
 DEFAULT_URL = "http://localhost:8000/tts"
 DEFAULT_VOICE = "narrador.wav"
 DEFAULT_LANGUAGE = "pt"
+# Matches the server's default TTS_POOL_SIZE: XTTS is autoregressive, so one
+# request at a time leaves most of the GPU idle.
+DEFAULT_WORKERS = 3
 
 
 # --- main -----------------------------------------------------------------
@@ -74,6 +79,10 @@ def main(argv=None):
                         help="Only process this many parts.")
     parser.add_argument("--skip-existing", action="store_true",
                         help="Skip parts whose audio file already exists and is valid.")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
+                        help="Parts to synthesize concurrently. Keep this at or "
+                             "below the server's TTS_POOL_SIZE; higher just "
+                             "queues requests. Use 1 for strictly serial runs.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Only build parts.json; do not call the TTS API.")
     parser.add_argument("--join", action="store_true",
@@ -114,37 +123,30 @@ def main(argv=None):
         print(f"Dry run: wrote {parts_json}")
         return 0
 
-    processed = 0
+    pending = []
     for part in parts:
         if part["part_id"] < args.start_id:
             part["status"] = "skipped"
             continue
-        if args.limit is not None and processed >= args.limit:
+        if args.limit is not None and len(pending) >= args.limit:
             part["status"] = "pending"
             continue
+        pending.append(part)
 
-        print(f"[{part['part_id']}/{len(parts)}] {part['chars']} chars: "
-              f"{part['text'][:60]!r}")
-        audio_file = process_part(part, args)
-        processed += 1
+    print(f"Synthesizing {len(pending)} parts, {args.workers} at a time.")
+    failed = synthesize_parts(pending, args)
 
-        if audio_file is None:
-            part["status"] = "failed"
-            part["audio_file"] = None
-            # Persist progress before bailing out.
-            parts_json.write_text(
-                json.dumps(parts, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            print(f"\nStopping: part {part['part_id']} could not be synthesized "
-                  f"after {args.retries} attempts.")
-            return 1
-
-        part["status"] = "done"
-        part["audio_file"] = audio_file
-
+    # Persist progress either way: on failure this is the resume point.
     parts_json.write_text(
         json.dumps(parts, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+    if failed is not None:
+        print(f"\nStopping: part {failed['part_id']} could not be synthesized "
+              f"after {args.retries} attempts.")
+        print(f"Resume with --start-id {failed['part_id']} --skip-existing")
+        return 1
+
     print(f"\nDone. Wrote {parts_json} and audio to {args.output}/")
     return 0
 

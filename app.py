@@ -1,5 +1,5 @@
 import os
-import threading
+import queue
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,12 +22,21 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 DEVICE = os.environ.get("TTS_DEVICE", "cuda")
 
-print("Loading XTTS model...")
-tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(DEVICE)
-# XTTS inference is not thread-safe, and FastAPI runs sync endpoints in a
-# threadpool, so serialize access to the single shared model.
-tts_lock = threading.Lock()
-print("XTTS model loaded.")
+# XTTS is autoregressive: a single stream leaves most of the GPU idle (~25% on a
+# 16 GB card). Holding several independent model instances and serving requests
+# concurrently fills those gaps. Each extra instance costs ~3 GB of VRAM (the
+# CUDA context is shared within the process), so 3 fits comfortably in 16 GB.
+POOL_SIZE = int(os.environ.get("TTS_POOL_SIZE", "3"))
+
+# XTTS inference is not thread-safe, so a model is checked out of the pool for
+# the duration of a request and returned afterwards. The queue doubles as the
+# admission control: request N+1 blocks until an instance frees up.
+print(f"Loading {POOL_SIZE} XTTS model instance(s)...")
+tts_pool: queue.Queue = queue.Queue()
+for i in range(POOL_SIZE):
+    tts_pool.put(TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(DEVICE))
+    print(f"  instance {i + 1}/{POOL_SIZE} loaded.")
+print("XTTS models loaded.")
 
 
 class TTSRequest(BaseModel):
@@ -38,7 +47,7 @@ class TTSRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "pool_size": POOL_SIZE, "idle": tts_pool.qsize()}
 
 
 @app.get("/voices")
@@ -56,13 +65,16 @@ def generate(req: TTSRequest):
 
     output = OUTPUT_DIR / f"{uuid4()}.wav"
 
-    with tts_lock:
+    tts = tts_pool.get()
+    try:
         tts.tts_to_file(
             text=req.text,
             speaker_wav=str(voice),
             language=req.language,
             file_path=str(output),
         )
+    finally:
+        tts_pool.put(tts)
 
     # Stream the file back, then delete it so output/ doesn't grow unbounded.
     return FileResponse(

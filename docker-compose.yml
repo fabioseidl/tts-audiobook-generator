@@ -4,6 +4,10 @@ services:
     container_name: xtts-server
     ports:
       - "8000:8000"
+    environment:
+      # Number of XTTS instances held in memory and served concurrently.
+      # ~3 GB of VRAM each after the first; raise only if nvidia-smi shows room.
+      TTS_POOL_SIZE: "3"
     volumes:
       - ./voices:/app/voices
       - ./output:/app/output
@@ -16,8 +20,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      # First start downloads (~1.8 GB) and loads the model; give it headroom.
-      start_period: 300s
+      # First start downloads (~1.8 GB) and loads TTS_POOL_SIZE copies of the
+      # model onto the GPU; give it headroom.
+      start_period: 600s
     deploy:
       resources:
         reservations:
